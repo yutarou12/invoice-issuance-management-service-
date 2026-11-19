@@ -28,6 +28,13 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
+import ReceiptLongOutlinedIcon from '@mui/icons-material/ReceiptLongOutlined';
+import PeopleOutlineIcon from '@mui/icons-material/PeopleOutline';
+import TuneIcon from '@mui/icons-material/Tune';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import AddIcon from '@mui/icons-material/Add';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import CheckIcon from '@mui/icons-material/Check';
 import type {
   Contact,
   Invoice,
@@ -54,67 +61,52 @@ const titles: Record<Section, string> = {
   settings: '発行者・振込先',
 };
 
-function Icon({ type }: { type: string }) {
-  const paths: Record<string, ReactNode> = {
-    invoice: (
-      <>
-        <path d="M6 3h9l3 3v15H6z" />
-        <path d="M9 9h6M9 13h6M9 17h4" />
-      </>
-    ),
-    contacts: (
-      <>
-        <circle cx="10" cy="8" r="3" />
-        <path d="M4 20v-2a6 6 0 0 1 12 0v2M17 5a3 3 0 0 1 0 6M20 20v-2a6 6 0 0 0-3-5" />
-      </>
-    ),
-    settings: (
-      <>
-        <path d="M4 7h16M4 17h16" />
-        <circle cx="9" cy="7" r="3" fill="currentColor" />
-        <circle cx="15" cy="17" r="3" fill="currentColor" />
-      </>
-    ),
-    arrow: <path d="m9 5 7 7-7 7" />,
-    plus: <path d="M12 5v14M5 12h14" />,
-  };
-  return (
-    <svg
-      width="22"
-      height="22"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.7"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      {paths[type] || paths.invoice}
-    </svg>
-  );
-}
 function Status({ invoice }: { invoice: Invoice }) {
   const overdue =
     invoice.status !== 'completed' &&
     invoice.status !== 'cancelled' &&
     invoice.dueDate < today();
+  const status = overdue ? 'overdue' : invoice.status;
+  const styles = {
+    issued: {
+      color: '#854d0e',
+      backgroundColor: '#fef3c7',
+      borderColor: '#f5cf70',
+    },
+    sent: {
+      color: '#0031d8',
+      backgroundColor: '#edf2ff',
+      borderColor: '#b8c9ff',
+    },
+    completed: {
+      color: '#17643b',
+      backgroundColor: '#e8f5ec',
+      borderColor: '#a8d5b8',
+    },
+    cancelled: {
+      color: '#586174',
+      backgroundColor: '#f0f1f4',
+      borderColor: '#cbd0d9',
+    },
+    overdue: {
+      color: '#b42318',
+      backgroundColor: '#fef0ed',
+      borderColor: '#f3b5ad',
+    },
+  };
   return (
     <Chip
       size="small"
       variant="outlined"
-      color={
-        invoice.status === 'completed'
-          ? 'success'
-          : overdue
-            ? 'error'
-            : invoice.status === 'sent'
-              ? 'primary'
-              : 'default'
-      }
+      sx={{
+        ...styles[status],
+        fontWeight: 700,
+        '& .MuiChip-icon': { color: 'inherit' },
+      }}
+      icon={invoice.status === 'completed' ? <CheckIcon /> : undefined}
       label={
         invoice.status === 'completed'
-          ? '✓ 完了'
+          ? '完了'
           : invoice.status === 'cancelled'
             ? '取り消し済み'
             : overdue
@@ -130,7 +122,7 @@ function Empty({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="empty">
       <div className="empty-icon">
-        <Icon type="invoice" />
+        <ReceiptLongOutlinedIcon sx={{ fontSize: 22 }} />
       </div>
       <h3>{title}</h3>
       <p>{children}</p>
@@ -297,7 +289,7 @@ export default function App() {
           }}
         >
           <span className="brand-icon">
-            <Icon type="invoice" />
+            <ReceiptLongOutlinedIcon sx={{ fontSize: 22 }} />
           </span>
           <span>
             たてかえ<small>請求書・領収書管理</small>
@@ -312,7 +304,13 @@ export default function App() {
               className={section === item ? 'nav-item active' : 'nav-item'}
               onClick={() => setSection(item)}
             >
-              <Icon type={item === 'invoices' ? 'invoice' : item} />
+              {item === 'invoices' ? (
+                <ReceiptLongOutlinedIcon sx={{ fontSize: 22 }} />
+              ) : item === 'contacts' ? (
+                <PeopleOutlineIcon sx={{ fontSize: 22 }} />
+              ) : (
+                <TuneIcon sx={{ fontSize: 22 }} />
+              )}
               {titles[item]}
               {item === 'invoices' && (
                 <span className="nav-count">{summary.total}</span>
@@ -358,7 +356,7 @@ export default function App() {
             {section !== 'settings' && (
               <Button
                 variant="contained"
-                startIcon={<Icon type="plus" />}
+                startIcon={<AddIcon sx={{ fontSize: 22 }} />}
                 onClick={() =>
                   section === 'invoices'
                     ? setInvoiceOpen(true)
@@ -456,7 +454,7 @@ export default function App() {
                     </TableCell>
                     <TableCell>
                       <Button size="small" onClick={() => showDetail(invoice)}>
-                        詳細 <Icon type="arrow" />
+                        詳細 <ChevronRightIcon sx={{ fontSize: 22 }} />
                       </Button>
                     </TableCell>
                   </TableRow>
@@ -1444,7 +1442,7 @@ function InvoiceDialog({
                       ])
                     }
                   >
-                    <Icon type="plus" />
+                    <AddIcon sx={{ fontSize: 22 }} />
                   </IconButton>
                   <IconButton
                     aria-label={`項目${index + 1}を削除`}
@@ -1455,7 +1453,7 @@ function InvoiceDialog({
                       )
                     }
                   >
-                    <span aria-hidden="true">🗑️</span>
+                    <DeleteOutlineIcon sx={{ fontSize: 22 }} />
                   </IconButton>
                 </Stack>
               ))}
