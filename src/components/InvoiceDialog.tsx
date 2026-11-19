@@ -44,6 +44,10 @@ export default function InvoiceDialog({
   type Draft = { items: ReturnType<typeof newItem>[]; dueDate: string };
   const newDraft = (): Draft => ({ items: [newItem()], dueDate: today() });
   const [mode, setMode] = useState<'bulk' | 'individual'>('bulk');
+  const [dismissedHints, setDismissedHints] = useState({
+    bulk: false,
+    individual: false,
+  });
   const [bulk, setBulk] = useState<Draft>(newDraft);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [activeId, setActiveId] = useState('');
@@ -90,6 +94,7 @@ export default function InvoiceDialog({
     setBulk(newDraft());
     setDrafts({});
     setMode('bulk');
+    setDismissedHints({ bulk: false, individual: false });
     setActiveId('');
     api<string[]>('/invoice-item-history')
       .then((values) => {
@@ -190,11 +195,22 @@ export default function InvoiceDialog({
               <ToggleButton value="individual">個別モード</ToggleButton>
               <ToggleButton value="bulk">一括モード</ToggleButton>
             </ToggleButtonGroup>
-            <Alert severity="info">
-              {mode === 'bulk'
-                ? '選択した全員に、同じ内容・金額・支払期日で請求書を作成します。金額は1人あたりです。'
-                : '左右の矢印で宛先を切り替え、内容・金額・支払期日を個別に入力してください。'}
-            </Alert>
+            {!dismissedHints[mode] && (
+              <Alert
+                severity="info"
+                closeText="説明を閉じる"
+                onClose={() =>
+                  setDismissedHints((previous) => ({
+                    ...previous,
+                    [mode]: true,
+                  }))
+                }
+              >
+                {mode === 'bulk'
+                  ? '選択した全員に、同じ内容・金額・支払期日で請求書を作成します。金額は1人あたりです。'
+                  : '左右の矢印で宛先を切り替え、内容・金額・支払期日を個別に入力してください。'}
+              </Alert>
+            )}
             <Autocomplete
               multiple
               disableCloseOnSelect
