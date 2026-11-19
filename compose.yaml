@@ -1,0 +1,25 @@
+services:
+  app:
+    build: .
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:3000:3000"
+    environment:
+      APP_PASSWORD: ${APP_PASSWORD:?APP_PASSWORDを.envに設定してください}
+      SMTP_HOST: ${SMTP_HOST:-smtp.mx.cloudflare.net}
+      SMTP_PORT: ${SMTP_PORT:-465}
+      SMTP_USER: ${SMTP_USER:-api_token}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+    volumes:
+      - invoice-data:/app/data
+    restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/summary',{headers:{Authorization:'Basic '+Buffer.from('admin:'+process.env.APP_PASSWORD).toString('base64')}}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+volumes:
+  invoice-data:
