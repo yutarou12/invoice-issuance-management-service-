@@ -294,19 +294,23 @@ export function createApp(
     const data = invoiceSchema.parse(req.body);
     const issuer = store.settings();
     check(issuer, 400, '先に発行者・振込先を設定してください');
-    check(data.dueDate >= today(), 400, '期日は本日以降を指定してください');
-    const contacts = data.contactIds.map((id) =>
-      store.contacts().find((item) => item.id === id),
+    check(
+      data.every((entry) => entry.dueDate >= today()),
+      400,
+      '期日は本日以降を指定してください',
+    );
+    const contacts = data.map((entry) =>
+      store.contacts().find((item) => item.id === entry.contactId),
     );
     check(contacts.every(Boolean), 400, '選択された連絡先が見つかりません');
-    const invoices: Invoice[] = contacts.map((contact) => ({
+    const invoices: Invoice[] = contacts.map((contact, index) => ({
       id: `INV-${randomUUID()}`,
       contact: contact!,
       issuer: issuer!,
-      items: data.items,
-      amount: data.amount,
-      description: data.description,
-      dueDate: data.dueDate,
+      items: data[index].items,
+      amount: data[index].amount,
+      description: data[index].description,
+      dueDate: data[index].dueDate,
       issuedAt: new Date().toISOString(),
       status: 'issued',
     }));

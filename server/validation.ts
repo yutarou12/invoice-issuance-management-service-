@@ -38,7 +38,7 @@ const invoiceItems = z
     (items) => items.reduce((sum, item) => sum + item.amount, 0) <= 999999999,
     '合計金額は999,999,999円以下にしてください',
   );
-export const invoiceSchema = z
+const bulkInvoiceSchema = z
   .object({
     contactIds: z
       .array(z.uuid())
@@ -68,6 +68,46 @@ export const invoiceSchema = z
       description: items.map((item) => item.description).join(' / '),
     };
   });
+export const invoiceSchema = z.union([
+  z
+    .object({
+      mode: z.literal('individual'),
+      invoices: z
+        .array(
+          z.object({
+            contactId: z.uuid(),
+            items: invoiceItems,
+            dueDate: dateSchema,
+          }),
+        )
+        .min(1)
+        .max(100)
+        .refine(
+          (entries) =>
+            new Set(entries.map((entry) => entry.contactId)).size ===
+            entries.length,
+        ),
+    })
+    .transform((data) =>
+      data.invoices.map((entry) => ({
+        ...entry,
+        amount: entry.items.reduce((sum, item) => sum + item.amount, 0),
+        description: entry.items.map((item) => item.description).join(' / '),
+      })),
+    ),
+  z
+    .object({ mode: z.literal('bulk').optional() })
+    .and(bulkInvoiceSchema)
+    .transform((data) =>
+      data.contactIds.map((contactId) => ({
+        contactId,
+        items: data.items,
+        amount: data.amount,
+        description: data.description,
+        dueDate: data.dueDate,
+      })),
+    ),
+]);
 export const receiptSchema = z.object({
   name: text(60),
   description: text(160),

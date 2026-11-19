@@ -354,6 +354,76 @@ test('主要API: 認証・検証・CSVの原子性・書類生成・状態遷移
     assert.equal(persisted.invoices()[0].status, 'cancelled');
     assert.equal(persisted.invoices()[0].cancelledAt, cancelled.cancelledAt);
     persisted.db.close();
+    const other = store.contacts().find((entry) => entry.id !== contact.id)!;
+    const entries = [
+      {
+        contactId: contact.id,
+        items: [{ description: '参加費', amount: 1000 }],
+        dueDate: today(),
+      },
+      {
+        contactId: other.id,
+        items: [
+          { description: '会費', amount: 2500 },
+          { description: '交通費', amount: 500 },
+        ],
+        dueDate: '2099-12-31',
+      },
+    ];
+    const individualResponse = await request('/invoices', {
+      mode: 'individual',
+      invoices: entries,
+    });
+    assert.equal(individualResponse.status, 201);
+    const individual = (await individualResponse.json()) as Invoice[];
+    assert.deepEqual(
+      individual.map((entry) => ({
+        contactId: entry.contact.id,
+        items: entry.items,
+        dueDate: entry.dueDate,
+      })),
+      entries,
+    );
+    assert.deepEqual(
+      individual.map((entry) => entry.amount),
+      [1000, 3000],
+    );
+    assert.deepEqual(
+      individual.map((entry) => entry.description),
+      ['参加費', '会費 / 交通費'],
+    );
+    const count = store.invoices().length;
+    for (const invalid of [
+      [],
+      [entries[0], entries[0]],
+      [entries[0], { ...entries[1], items: [] }],
+      [entries[0], { ...entries[1], dueDate: '2000-01-01' }],
+      [entries[0], { ...entries[1], dueDate: '2099-02-30' }],
+      [
+        entries[0],
+        { ...entries[1], contactId: '00000000-0000-4000-8000-000000000000' },
+      ],
+    ]) {
+      assert.equal(
+        (await request('/invoices', { mode: 'individual', invoices: invalid }))
+          .status,
+        400,
+      );
+      assert.equal(store.invoices().length, count);
+    }
+    const bulkResponse = await request('/invoices', {
+      mode: 'bulk',
+      contactIds: entries.map((entry) => entry.contactId),
+      items,
+      dueDate: today(),
+    });
+    assert.equal(bulkResponse.status, 201);
+    const bulkInvoices = (await bulkResponse.json()) as Invoice[];
+    assert.equal(bulkInvoices.length, 2);
+    bulkInvoices.forEach((entry) => {
+      assert.deepEqual(entry.items, items);
+      assert.equal(entry.amount, 3500);
+    });
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     store.db.close();

@@ -12,7 +12,11 @@ import {
   Stack,
   TextField,
   Typography,
+  ToggleButton,
+  ToggleButtonGroup,
 } from '@mui/material';
+import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import type { Contact, Page } from '../../shared/types';
@@ -37,20 +41,56 @@ export default function InvoiceDialog({
     description: '',
     amount: '',
   });
-  const [items, setItems] = useState(() => [newItem()]);
+  type Draft = { items: ReturnType<typeof newItem>[]; dueDate: string };
+  const newDraft = (): Draft => ({ items: [newItem()], dueDate: today() });
+  const [mode, setMode] = useState<'bulk' | 'individual'>('bulk');
+  const [bulk, setBulk] = useState<Draft>(newDraft);
+  const [drafts, setDrafts] = useState<Record<string, Draft>>({});
+  const [activeId, setActiveId] = useState('');
+  const activeIndex = Math.max(
+    0,
+    selected.findIndex((contact) => contact.id === activeId),
+  );
+  const activeContact = selected[activeIndex];
+  const draft = mode === 'bulk' ? bulk : drafts[activeContact?.id];
+  const items = draft?.items ?? [];
+  const updateDraft = (update: (value: Draft) => Draft) => {
+    if (mode === 'bulk') setBulk(update);
+    else if (activeContact)
+      setDrafts((values) => ({
+        ...values,
+        [activeContact.id]: update(values[activeContact.id]),
+      }));
+  };
+  const setItems = (update: (rows: Draft['items']) => Draft['items']) =>
+    updateDraft((value) => ({ ...value, items: update(value.items) }));
   const [history, setHistory] = useState<string[]>([]);
   const totalAmount = items.reduce((sum, item) => sum + Number(item.amount), 0);
-  const validItems =
-    items.every(
+  const isValid = (value?: Draft) =>
+    !!value &&
+    value.items.length > 0 &&
+    value.items.every(
       (item) =>
         item.description.trim() &&
+        item.description.trim().length <= 160 &&
         Number.isInteger(Number(item.amount)) &&
         Number(item.amount) > 0,
-    ) && totalAmount <= 999999999;
+    ) &&
+    value.items.reduce((sum, item) => sum + Number(item.amount), 0) <=
+      999999999 &&
+    /^\d{4}-\d{2}-\d{2}$/.test(value.dueDate) &&
+    value.dueDate >= today();
+  const validItems =
+    mode === 'bulk'
+      ? isValid(bulk)
+      : selected.every((contact) => isValid(drafts[contact.id]));
   useEffect(() => {
     if (!open) return;
     let active = true;
-    setItems([newItem()]);
+    setBulk(newDraft());
+    setDrafts({});
+    setMode('bulk');
+    setActiveId('');
     api<string[]>('/invoice-item-history')
       .then((values) => {
         if (active) setHistory(values);
@@ -109,29 +149,68 @@ export default function InvoiceDialog({
             onError(new Error('宛先を1人以上選んでください'));
             return;
           }
-          const form = new FormData(event.currentTarget);
-          onSubmit({
-            contactIds: selected.map((contact) => contact.id),
-            items: items.map((item) => ({
+          if (busy || selected.length > 100 || !validItems) return;
+          const serialize = (value: Draft) => ({
+            items: value.items.map((item) => ({
               description: item.description,
               amount: Number(item.amount),
             })),
-            dueDate: form.get('dueDate'),
+            dueDate: value.dueDate,
           });
+          onSubmit(
+            mode === 'bulk'
+              ? {
+                  mode,
+                  contactIds: selected.map((contact) => contact.id),
+                  ...serialize(bulk),
+                }
+              : {
+                  mode,
+                  invoices: selected.map((contact) => ({
+                    contactId: contact.id,
+                    ...serialize(drafts[contact.id]),
+                  })),
+                },
+          );
         }}
       >
         <DialogTitle>請求書を発行</DialogTitle>
         <DialogContent>
           <Stack spacing={3} sx={{ pt: 1 }}>
+            <ToggleButtonGroup
+              exclusive
+              value={mode}
+              disabled={busy}
+              onChange={(_event, value) => {
+                if (value) setMode(value);
+              }}
+              aria-label="請求書の作成モード"
+              fullWidth
+            >
+              <ToggleButton value="individual">個別モード</ToggleButton>
+              <ToggleButton value="bulk">一括モード</ToggleButton>
+            </ToggleButtonGroup>
             <Alert severity="info">
-              複数人を選択すると、1人ずつ請求書を発行します。金額は1人あたりです。
+              {mode === 'bulk'
+                ? '選択した全員に、同じ内容・金額・支払期日で請求書を作成します。金額は1人あたりです。'
+                : '左右の矢印で宛先を切り替え、内容・金額・支払期日を個別に入力してください。'}
             </Alert>
             <Autocomplete
               multiple
               disableCloseOnSelect
               options={contacts}
               value={selected}
-              onChange={(_event, value) => setSelected(value)}
+              disabled={busy}
+              onChange={(_event, value) => {
+                setSelected(value);
+                setDrafts((previous) => {
+                  const next = { ...previous };
+                  value.forEach((contact) => {
+                    next[contact.id] ??= newDraft();
+                  });
+                  return next;
+                });
+              }}
               inputValue={query}
               onInputChange={(_event, value, reason) => {
                 if (reason === 'input' || reason === 'clear') {
@@ -161,21 +240,69 @@ export default function InvoiceDialog({
                 />
               )}
             />
-            <div className="picker-pages">
-              <Button disabled={page === 0} onClick={() => setPage(page - 1)}>
-                前へ
-              </Button>
-              <span>
-                {total}件中 {Math.min(page * 25 + 1, total)}–
-                {Math.min((page + 1) * 25, total)}件
-              </span>
-              <Button
-                disabled={(page + 1) * 25 >= total}
-                onClick={() => setPage(page + 1)}
+            {total > 25 && (
+              <div className="picker-pages">
+                <Button disabled={page === 0} onClick={() => setPage(page - 1)}>
+                  前へ
+                </Button>
+                <span>
+                  {total}件中 {Math.min(page * 25 + 1, total)}–
+                  {Math.min((page + 1) * 25, total)}件
+                </span>
+                <Button
+                  disabled={(page + 1) * 25 >= total}
+                  onClick={() => setPage(page + 1)}
+                >
+                  次へ
+                </Button>
+              </div>
+            )}
+            {mode === 'individual' && (
+              <Stack
+                direction="row"
+                alignItems="center"
+                justifyContent="space-between"
+                spacing={1}
               >
-                次へ
-              </Button>
-            </div>
+                <IconButton
+                  aria-label="前の宛先"
+                  disabled={busy || activeIndex === 0}
+                  onClick={() => setActiveId(selected[activeIndex - 1].id)}
+                >
+                  <ChevronLeftIcon />
+                </IconButton>
+                <Stack
+                  sx={{
+                    minWidth: 0,
+                    textAlign: 'center',
+                    overflowWrap: 'anywhere',
+                  }}
+                  aria-live="polite"
+                >
+                  <Typography fontWeight={700}>
+                    {activeContact
+                      ? `${activeContact.name} (${activeContact.email})`
+                      : '宛先を選択してください'}
+                  </Typography>
+                  <Typography variant="caption">
+                    {selected.length ? activeIndex + 1 : 0} / {selected.length}
+                    人 · 入力済み{' '}
+                    {
+                      selected.filter((contact) => isValid(drafts[contact.id]))
+                        .length
+                    }
+                    人
+                  </Typography>
+                </Stack>
+                <IconButton
+                  aria-label="次の宛先"
+                  disabled={busy || activeIndex >= selected.length - 1}
+                  onClick={() => setActiveId(selected[activeIndex + 1].id)}
+                >
+                  <ChevronRightIcon />
+                </IconButton>
+              </Stack>
+            )}
             <Stack spacing={2}>
               <Typography component="h3">内容</Typography>
               {items.map((item, index) => (
@@ -254,7 +381,10 @@ export default function InvoiceDialog({
                 </Stack>
               ))}
               <Typography fontWeight={700}>
-                合計金額（1人あたり）：{yen(totalAmount)}
+                {mode === 'bulk'
+                  ? '合計金額（1人あたり）'
+                  : 'この宛先の合計金額'}
+                ：{yen(totalAmount)}
               </Typography>
               {totalAmount > 999999999 && (
                 <Alert severity="error">
@@ -267,7 +397,14 @@ export default function InvoiceDialog({
               label="お支払期日"
               type="date"
               required
-              defaultValue={today()}
+              value={draft?.dueDate ?? ''}
+              disabled={busy || !draft}
+              onChange={(event) =>
+                updateDraft((value) => ({
+                  ...value,
+                  dueDate: event.target.value,
+                }))
+              }
               slotProps={{
                 inputLabel: { shrink: true },
                 htmlInput: { min: today() },
