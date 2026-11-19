@@ -2,7 +2,7 @@
 
 友人への立替請求、送信記録、領収書発行をローカルで管理するアプリです。TypeScript / React / MUI / Express / SQLiteを使用します。
 
-## 起動（Docker Compose）
+## 起動（Docker Compose / nginx HTTPS）
 
 DockerとDocker Compose v2が必要です。
 
@@ -12,13 +12,71 @@ cp .env.example .env
 
 .envのAPP_PASSWORDを独自の16文字以上のパスワードに変更してください。サンプルのままでは起動できません。
 
+自宅CAで発行した**サーバー証明書と、そのサーバー用秘密鍵**を用意します。証明書のSANにはアクセス時のホスト名（例: `invoice.home.arpa`）、IPでアクセスするならそのIPアドレスを含めてください。CAの秘密鍵はアプリに配置しません。
+
 ```sh
+mkdir -p certs
+# 発行済みの証明書・秘密鍵を配置（コピー元は実際のパスへ変更）
+cp /path/to/fullchain.pem certs/fullchain.pem
+cp /path/to/privkey.pem certs/privkey.pem
+```
+
+- `fullchain.pem`: PEM形式。サーバー証明書を先頭に、必要な中間CA証明書を順に連結します。ルートCAによる直接署名ならサーバー証明書のみです。
+- `privkey.pem`: 対応するPEM形式のサーバー秘密鍵。無人起動できるようパスフレーズなしで用意し、読み取り権限を制限します。
+- 接続するPC・スマートフォンで自宅CAの**ルート証明書**を信頼済みに登録し、ローカルDNSまたはhostsでホスト名をサーバーIPへ解決できるようにします。
+
+nginxは非root（UID/GID 101）で動作します。Linuxホストでは、証明書ディレクトリの通過権限と秘密鍵の読み取り権限を付与してください。標準Dockerでの例です（独自パスを指定する場合は読み替え）。
+
+```sh
+sudo chown -R root:101 certs
+sudo chmod 750 certs
+sudo chmod 640 certs/fullchain.pem certs/privkey.pem
+```
+
+LAN/VPN上の端末から使う場合の`.env`設定例です。`BIND_ADDRESS`はサーバー自身のLAN/VPN IPに変更してください。
+
+```dotenv
+BIND_ADDRESS=192.168.1.10
+HTTPS_PORT=443
+NGINX_CONF_PATH=./nginx/default.conf
+TLS_CERTS_DIR=./certs
+```
+
+```sh
+docker compose config --quiet
+docker compose run --rm --no-deps nginx nginx -t
 docker compose up --build -d
 ```
 
-[http://localhost:3000](http://localhost:3000)を開き、ユーザー名admin、設定したパスワードでログインします。最初に「発行者・振込先」で名前と口座を保存してください。
+証明書に合わせたURL（例: `https://invoice.home.arpa`）を開き、ユーザー名admin、設定したパスワードでログインします。`HTTPS_PORT=8443`ならURLにも`:8443`を付けます。既定の`BIND_ADDRESS=127.0.0.1`はサーバー自身からのみアクセスできます。最初に「発行者・振込先」で名前と口座を保存してください。
+
+構成は「ブラウザ → nginx（HTTPS）→ app:3000（Docker内部）」です。ホストへ公開するのはHTTPSのみで、HTTPの80番ポートとアプリの3000番ポートは公開しません。証明書がない状態ではnginxは起動しません。
 
 初期データは空です。連絡先を追加・CSV取込してから請求書を発行します。テンプレート内のサンプル行は実際の連絡先に置き換えてください。
+
+### nginx設定・証明書の差し替え
+
+`NGINX_CONF_PATH`のファイルを`/etc/nginx/conf.d/default.conf`へ、`TLS_CERTS_DIR`のディレクトリを`/etc/nginx/certs`へ、読み取り専用のbind mountで渡します。どちらもホスト側の絶対パスを指定でき、イメージの再ビルドは不要です。ファイル・ディレクトリは起動前に作成してください。
+
+証明書を更新したら、同じディレクトリ内の`fullchain.pem`と`privkey.pem`を置き換え、権限を確認して再読み込みします。ホスト側のシンボリックリンクを使う場合、リンク先もコンテナから参照できる必要があります。
+
+```sh
+docker compose exec nginx nginx -t
+# 上の検証が成功した場合のみ実行
+docker compose exec nginx nginx -s reload
+```
+
+`default.conf`を編集・置換した場合や`.env`のマウント元・ポート・公開先を変更した場合は、次の手順で反映します。ファイル単体のbind mountは、エディタによるファイル置換を既存コンテナに反映しない場合があるため、再作成します。
+
+```sh
+docker compose run --rm --no-deps nginx nginx -t
+# 上の検証が成功した場合のみ実行
+docker compose up -d --no-deps --force-recreate nginx
+```
+
+証明書と秘密鍵はGit管理・Dockerビルド対象外です。独自の配置先をリポジトリ内に設ける場合は、そのディレクトリも`.gitignore`と`.dockerignore`に追加してください。
+
+nginx設定を変更する際は、`Host`のポート番号と`Origin`を保持し、`X-Forwarded-For`を`$remote_addr`で上書きしてください。Composeでは`TRUST_PROXY=1`で直前のnginxだけを信頼し、認証試行制限を接続元IPごとに適用します。この設定でappを直接公開しないでください。設定の参考: [nginxプロキシ仕様](https://nginx.org/en/docs/http/ngx_http_proxy_module.html)、[非rootイメージ](https://github.com/nginx/docker-nginx-unprivileged)、[Expressのプロキシ設定](https://expressjs.com/en/guide/behind-proxies/)。
 
 ## 使い方
 
@@ -45,11 +103,11 @@ docker compose up --build -d
 
 ## VPN経由の利用
 
-既定の公開先は127.0.0.1のみです。.envのBIND_ADDRESSを**ホストのVPN IP**に変更し、コンテナを再作成します。インターネットへのポート転送は不要です。
+既定の公開先は127.0.0.1のみです。.envのBIND_ADDRESSを**ホストのVPN IP**に変更し、nginxコンテナを再作成します。証明書のホスト名がVPN IPへ解決されるようにしてください。インターネットへのポート転送は不要です。
 
-Basic認証は通信の暗号化を行わないため、VPN内でもHTTPSリバースプロキシの利用を推奨します。Web Share APIはHTTPSまたはlocalhostの対応ブラウザでのみ利用できます。VPN IPのHTTP接続ではPNGを保存してLINE等へ添付し、「共有先への送信を記録」で状態を更新してください。共有ダイアログの終了だけでは送信成功を判定できません。
+ComposeではVPN内でもnginx経由のHTTPSを使用します。Web Share APIはHTTPSまたはlocalhostの対応ブラウザでのみ利用できます。非対応の場合はPNGを保存してLINE等へ添付し、「共有先への送信を記録」で状態を更新してください。共有ダイアログの終了だけでは送信成功を判定できません。
 
-HTTPSプロキシは同じHost・Originをバックエンドに渡してください。独自CORS設定は不要です。このアプリは単一管理者向けで、複数ユーザーの権限分離はありません。
+独自CORS設定は不要です。このアプリは単一管理者向けで、複数ユーザーの権限分離はありません。
 
 ## ローカル開発
 
@@ -60,6 +118,8 @@ npm ci
 npm run build
 npm start
 ```
+
+Dockerなしで起動した場合は[http://localhost:3000](http://localhost:3000)を開きます。`PORT`・`HOST`はこのローカル起動用で、ComposeのHTTPS公開先には`HTTPS_PORT`・`BIND_ADDRESS`を使用します。ローカルで直接起動する場合は`TRUST_PROXY`を設定せず、転送ヘッダーを信頼しない既定動作を使ってください。
 
 開発時はAPI用に `npm run dev`、別ターミナルで `npm run dev:web`。Viteが表示するlocalhost URLを開きます。
 

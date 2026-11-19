@@ -66,6 +66,23 @@ test('主要API: 認証・検証・CSVの原子性・書類生成・状態遷移
       accountHolder: 'タテカエ タロウ',
     };
     assert.equal((await request('/settings', settings, 'PUT')).status, 200);
+    // nginxがHostのポート番号とOriginを保持すればHTTPS経由でも更新できる。
+    assert.equal(
+      (
+        await request('/settings', settings, 'PUT', {
+          Origin: `https://127.0.0.1:${address.port}`,
+        })
+      ).status,
+      200,
+    );
+    assert.equal(
+      (
+        await request('/settings', settings, 'PUT', {
+          Origin: `https://127.0.0.1:${address.port - 1}`,
+        })
+      ).status,
+      403,
+    );
     const contact = (await (
       await request('/contacts', {
         name: '山田 花子',
@@ -427,5 +444,57 @@ test('主要API: 認証・検証・CSVの原子性・書類生成・状態遷移
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     store.db.close();
+  }
+});
+
+test('nginx経由の認証試行制限: 直前の1段のみ信頼し、直接起動では転送元を信頼しない', async () => {
+  for (const trustProxy of [undefined, '1']) {
+    const store = createStore(
+      mkdtempSync(join(tmpdir(), 'tatekae-proxy-test-')),
+    );
+    const previous = process.env.TRUST_PROXY;
+    let app;
+    try {
+      if (trustProxy === undefined) delete process.env.TRUST_PROXY;
+      else process.env.TRUST_PROXY = trustProxy;
+      app = createApp(store, 'test-password-123456');
+    } finally {
+      if (previous === undefined) delete process.env.TRUST_PROXY;
+      else process.env.TRUST_PROXY = previous;
+    }
+    const server = app.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    assert(address && typeof address !== 'string');
+    const url = `http://127.0.0.1:${address.port}/api/summary`;
+    async function request(forwardedFor: string, authenticated = false) {
+      const response = await fetch(url, {
+        headers: {
+          'X-Forwarded-For': forwardedFor,
+          ...(authenticated
+            ? {
+                Authorization: `Basic ${Buffer.from('admin:test-password-123456').toString('base64')}`,
+              }
+            : {}),
+        },
+      });
+      await response.arrayBuffer();
+      return response.status;
+    }
+    try {
+      for (let attempt = 0; attempt < 20; attempt++) {
+        assert.equal(await request('198.51.100.1'), 401);
+      }
+      assert.equal(await request('198.51.100.1', true), 429);
+      // 信頼する1段より前にIPを追加しても制限を回避できない。
+      assert.equal(await request('198.51.100.2, 198.51.100.1', true), 429);
+      assert.equal(
+        await request('198.51.100.2', true),
+        trustProxy === '1' ? 200 : 429,
+      );
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      store.db.close();
+    }
   }
 });
