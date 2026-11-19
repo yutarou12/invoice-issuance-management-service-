@@ -135,10 +135,15 @@ export function createApp(
     const items = store.invoices();
     res.json({
       outstanding: items
-        .filter((item) => item.status !== 'completed')
+        .filter(
+          (item) => item.status !== 'completed' && item.status !== 'cancelled',
+        )
         .reduce((sum, item) => sum + item.amount, 0),
       overdue: items.filter(
-        (item) => item.status !== 'completed' && item.dueDate < today(),
+        (item) =>
+          item.status !== 'completed' &&
+          item.status !== 'cancelled' &&
+          item.dueDate < today(),
       ).length,
       completed: items.filter((item) => item.status === 'completed').length,
       total: items.length,
@@ -251,6 +256,21 @@ export function createApp(
     );
     res.status(201).json({ imported: contacts.length });
   });
+  app.get('/api/invoice-item-history', (req, res) => {
+    const q = queryText(req.query.q);
+    const descriptions = store
+      .invoices()
+      .flatMap((invoice) =>
+        (invoice.items ?? [{ description: invoice.description }]).map(
+          (item) => item.description,
+        ),
+      );
+    res.json(
+      [...new Set(descriptions)].filter((value) =>
+        value.toLocaleLowerCase().includes(q),
+      ),
+    );
+  });
   app.get('/api/invoices', (req, res) => {
     const q = queryText(req.query.q);
     const status = queryText(req.query.status);
@@ -263,7 +283,9 @@ export function createApp(
           ) &&
           (!status ||
             (status === 'overdue'
-              ? item.status !== 'completed' && item.dueDate < today()
+              ? item.status !== 'completed' &&
+                item.status !== 'cancelled' &&
+                item.dueDate < today()
               : item.status === status)),
       );
     res.json(paginate(items, req.query));
@@ -281,6 +303,7 @@ export function createApp(
       id: `INV-${randomUUID()}`,
       contact: contact!,
       issuer: issuer!,
+      items: data.items,
       amount: data.amount,
       description: data.description,
       dueDate: data.dueDate,
@@ -295,8 +318,27 @@ export function createApp(
   );
   // 同一書類の送信中は再送・領収書変更を拒否し、非同期処理による上書きを防ぐ。
   const sending = new Set<string>();
+  app.post('/api/invoices/:id/cancel', (req, res) => {
+    z.object({}).strict().parse(req.body);
+    const invoice = findInvoice(req.params.id);
+    check(
+      !sending.has(invoice.id),
+      409,
+      '送信処理中です。完了をお待ちください',
+    );
+    check(invoice.status !== 'cancelled', 409, 'この請求書は取り消し済みです');
+    invoice.status = 'cancelled';
+    invoice.cancelledAt = new Date().toISOString();
+    store.saveInvoice(invoice);
+    res.json(invoice);
+  });
   app.post('/api/invoices/:id/receipt', (req, res) => {
     const invoice = findInvoice(req.params.id);
+    check(
+      invoice.status !== 'cancelled',
+      409,
+      '取り消し済みの請求書には領収書を発行できません',
+    );
     const data = receiptSchema.parse(req.body);
     check(!sending.has(invoice.id), 409, '送信処理中です');
     check(!invoice.receipt, 409, '領収書は発行済みです');
@@ -337,6 +379,11 @@ export function createApp(
       !sending.has(invoice.id),
       409,
       '送信処理中です。完了をお待ちください',
+    );
+    check(
+      invoice.status !== 'cancelled',
+      409,
+      '取り消し済みの請求書は送信できません',
     );
     const alreadySent =
       kind === 'invoice' ? invoice.sentAt : invoice.receipt?.sentAt;

@@ -29,16 +29,45 @@ export const dateSchema = z
       !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value
     );
   }, '有効な日付を入力してください');
-export const invoiceSchema = z.object({
-  contactIds: z
-    .array(z.uuid())
-    .min(1)
-    .max(100)
-    .refine((ids) => new Set(ids).size === ids.length),
-  amount: z.number().int().min(1).max(999999999),
-  description: text(160),
-  dueDate: dateSchema,
-});
+const money = z.number().int().min(1).max(999999999);
+const invoiceItems = z
+  .array(z.object({ description: text(160), amount: money }))
+  .min(1)
+  .max(100)
+  .refine(
+    (items) => items.reduce((sum, item) => sum + item.amount, 0) <= 999999999,
+    '合計金額は999,999,999円以下にしてください',
+  );
+export const invoiceSchema = z
+  .object({
+    contactIds: z
+      .array(z.uuid())
+      .min(1)
+      .max(100)
+      .refine((ids) => new Set(ids).size === ids.length),
+    dueDate: dateSchema,
+  })
+  .and(
+    z.union([
+      z.object({ items: invoiceItems }),
+      z.object({
+        items: z.never().optional(),
+        amount: money,
+        description: text(160),
+      }),
+    ]),
+  )
+  .transform((data) => {
+    const items = data.items ?? [
+      { description: data.description, amount: data.amount },
+    ];
+    return {
+      ...data,
+      items,
+      amount: items.reduce((sum, item) => sum + item.amount, 0),
+      description: items.map((item) => item.description).join(' / '),
+    };
+  });
 export const receiptSchema = z.object({
   name: text(60),
   description: text(160),

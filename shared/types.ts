@@ -22,7 +22,12 @@ export interface Receipt {
   issuedAt: string;
   sentAt?: string;
 }
+export interface InvoiceItem {
+  description: string;
+  amount: number;
+}
 export interface Invoice {
+  items?: InvoiceItem[];
   id: string;
   contact: Contact;
   issuer: Settings;
@@ -30,7 +35,8 @@ export interface Invoice {
   description: string;
   dueDate: string;
   issuedAt: string;
-  status: 'issued' | 'sent' | 'completed';
+  status: 'issued' | 'sent' | 'completed' | 'cancelled';
+  cancelledAt?: string;
   sentAt?: string;
   receipt?: Receipt;
 }

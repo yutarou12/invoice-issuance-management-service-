@@ -13,6 +13,7 @@ import {
   Divider,
   FormControl,
   InputLabel,
+  IconButton,
   MenuItem,
   Select,
   Snackbar,
@@ -94,7 +95,10 @@ function Icon({ type }: { type: string }) {
   );
 }
 function Status({ invoice }: { invoice: Invoice }) {
-  const overdue = invoice.status !== 'completed' && invoice.dueDate < today();
+  const overdue =
+    invoice.status !== 'completed' &&
+    invoice.status !== 'cancelled' &&
+    invoice.dueDate < today();
   return (
     <Chip
       size="small"
@@ -111,11 +115,13 @@ function Status({ invoice }: { invoice: Invoice }) {
       label={
         invoice.status === 'completed'
           ? '✓ 完了'
-          : overdue
-            ? '期日超過'
-            : invoice.status === 'sent'
-              ? '送信済み'
-              : '未送信'
+          : invoice.status === 'cancelled'
+            ? '取り消し済み'
+            : overdue
+              ? '期日超過'
+              : invoice.status === 'sent'
+                ? '送信済み'
+                : '未送信'
       }
     />
   );
@@ -151,7 +157,11 @@ export default function App() {
   const [contactEdit, setContactEdit] = useState<Partial<Contact>>();
   const [detail, setDetail] = useState<Invoice>();
   const [receiptOpen, setReceiptOpen] = useState(false);
+  const [cancelOpen, setCancelOpen] = useState(false);
   const [file, setFile] = useState<File>();
+  const [imageUrl, setImageUrl] = useState<string>();
+  const [imageLoading, setImageLoading] = useState(false);
+  const [imageRevision, setImageRevision] = useState(0);
   const [kind, setKind] = useState<Kind>('invoice');
   const [delivery, setDelivery] = useState<{
     method: 'email' | 'shared';
@@ -195,15 +205,27 @@ export default function App() {
   // 共有ボタンを押す前に画像ファイルを取得し、ブラウザのユーザー操作条件を満たす。
   useEffect(() => {
     setFile(undefined);
-    if (!detail) return;
+    setImageUrl(undefined);
+    if (!detail) {
+      setImageLoading(false);
+      return;
+    }
+    setImageLoading(true);
     let active = true;
-    fetch(`/api/invoices/${detail.id}/${kind}/image`)
+    let objectUrl: string | undefined;
+    const controller = new AbortController();
+    fetch(`/api/invoices/${detail.id}/${kind}/image`, {
+      cache: 'no-store',
+      signal: controller.signal,
+    })
       .then(async (response) => {
         if (!response.ok) throw new Error('画像を読み込めませんでした');
         return response.blob();
       })
       .then((blob) => {
-        if (active)
+        if (active) {
+          objectUrl = URL.createObjectURL(blob);
+          setImageUrl(objectUrl);
           setFile(
             new File(
               [blob],
@@ -211,14 +233,20 @@ export default function App() {
               { type: 'image/png' },
             ),
           );
+        }
       })
       .catch((value) => {
         if (active) fail(value);
+      })
+      .finally(() => {
+        if (active) setImageLoading(false);
       });
     return () => {
       active = false;
+      controller.abort();
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [detail, kind]);
+  }, [detail, kind, imageRevision]);
   const showDetail = (invoice: Invoice) => {
     setKind('invoice');
     setDetail(invoice);
@@ -411,6 +439,7 @@ export default function App() {
                       <span
                         className={
                           invoice.status !== 'completed' &&
+                          invoice.status !== 'cancelled' &&
                           invoice.dueDate < today()
                             ? 'overdue'
                             : ''
@@ -738,17 +767,23 @@ export default function App() {
                 ) : (
                   <Button
                     variant="outlined"
+                    disabled={busy || detail.status === 'cancelled'}
                     onClick={() => setReceiptOpen(true)}
                   >
                     領収書を発行
                   </Button>
                 )}
               </Stack>
-              <img
-                className="document-preview"
-                src={`/api/invoices/${detail.id}/${kind}/image`}
-                alt={`${detail.contact.name}様の${kind === 'invoice' ? '請求書' : '領収書'}。金額${yen(detail.amount)}`}
-              />
+              {imageLoading && (
+                <Typography role="status">画像を生成しています…</Typography>
+              )}
+              {imageUrl && (
+                <img
+                  className="document-preview"
+                  src={imageUrl}
+                  alt={`${detail.contact.name}様の${kind === 'invoice' ? '請求書' : '領収書'}。金額${yen(detail.amount)}`}
+                />
+              )}
               <Stack
                 direction="row"
                 spacing={1}
@@ -758,14 +793,16 @@ export default function App() {
               >
                 <Button
                   variant="contained"
-                  disabled={busy || !mailReady || !file}
+                  disabled={
+                    busy || !mailReady || !file || detail.status === 'cancelled'
+                  }
                   onClick={() => askDelivery('email')}
                 >
                   メールで送信
                 </Button>
                 <Button
                   variant="outlined"
-                  disabled={!file || busy}
+                  disabled={!file || busy || detail.status === 'cancelled'}
                   onClick={() => void share()}
                 >
                   画像を共有
@@ -773,10 +810,42 @@ export default function App() {
                 <Button disabled={!file || busy} onClick={download}>
                   PNGを保存
                 </Button>
-                <Button disabled={busy} onClick={() => askDelivery('shared')}>
+                <Button
+                  variant="outlined"
+                  disabled={busy || imageLoading}
+                  onClick={() => {
+                    setFile(undefined);
+                    setImageUrl(undefined);
+                    setImageLoading(true);
+                    setImageRevision((value) => value + 1);
+                  }}
+                >
+                  {imageLoading ? '画像を生成中…' : '画像を再生成'}
+                </Button>
+                <Button
+                  disabled={busy || detail.status === 'cancelled'}
+                  onClick={() => askDelivery('shared')}
+                >
                   共有先への送信を記録
                 </Button>
               </Stack>
+              {detail.status === 'cancelled' ? (
+                <Alert severity="warning" sx={{ mb: 2 }}>
+                  この請求書は取り消し済みです。
+                  {detail.cancelledAt &&
+                    ` 取消日時: ${dateTime(detail.cancelledAt)}`}
+                </Alert>
+              ) : (
+                <Button
+                  color="error"
+                  variant="outlined"
+                  disabled={busy}
+                  onClick={() => setCancelOpen(true)}
+                  sx={{ mb: 2 }}
+                >
+                  請求書を取り消す
+                </Button>
+              )}
               <Alert severity="info">
                 画像共有は対応ブラウザのHTTPS環境で利用できます。共有できない場合はPNGを保存してLINEなどで送信し、送信を記録してください。
                 {kind === 'receipt' &&
@@ -854,7 +923,7 @@ export default function App() {
                 label="但書"
                 name="description"
                 required
-                defaultValue={detail?.description}
+                defaultValue={detail?.description.slice(0, 160)}
                 inputProps={{ maxLength: 160 }}
               />
             </Stack>
@@ -917,6 +986,42 @@ export default function App() {
               : delivery?.method === 'email'
                 ? '送信する'
                 : '送信済みとして記録'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+      <Dialog open={cancelOpen} onClose={() => !busy && setCancelOpen(false)}>
+        <DialogTitle>請求書を取り消しますか</DialogTitle>
+        <DialogContent>
+          <p>
+            {detail?.contact.name} 様への請求 {detail && yen(detail.amount)}{' '}
+            を取り消します。
+          </p>
+          <Alert severity="warning">
+            履歴は残りますが、未回収額・期限超過の集計から除外され、送信や領収書発行ができなくなります。この操作は元に戻せません。送信済みの書類は回収されず、相手への通知や返金は行われません。
+          </Alert>
+        </DialogContent>
+        <DialogActions>
+          <Button disabled={busy} onClick={() => setCancelOpen(false)}>
+            戻る
+          </Button>
+          <Button
+            color="error"
+            variant="contained"
+            disabled={busy}
+            onClick={() =>
+              void run(async () => {
+                const updated = await api<Invoice>(
+                  `/invoices/${detail!.id}/cancel`,
+                  {},
+                );
+                setDetail(updated);
+                setCancelOpen(false);
+                refresh();
+                setNotice('請求書を取り消しました');
+              })
+            }
+          >
+            {busy ? '処理中…' : '取り消しを確定'}
           </Button>
         </DialogActions>
       </Dialog>
@@ -1054,6 +1159,7 @@ function Listing<T>({
                 ['sent', '送信済み'],
                 ['overdue', '期日超過'],
                 ['completed', '完了'],
+                ['cancelled', '取り消し済み'],
               ].map(([value, label]) => (
                 <MenuItem key={value} value={value}>
                   {label}
@@ -1132,6 +1238,36 @@ function InvoiceDialog({
   onError: (error: unknown) => void;
 }) {
   const [selected, setSelected] = useState<Contact[]>([]);
+  const newItem = () => ({
+    id: crypto.randomUUID(),
+    description: '',
+    amount: '',
+  });
+  const [items, setItems] = useState(() => [newItem()]);
+  const [history, setHistory] = useState<string[]>([]);
+  const totalAmount = items.reduce((sum, item) => sum + Number(item.amount), 0);
+  const validItems =
+    items.every(
+      (item) =>
+        item.description.trim() &&
+        Number.isInteger(Number(item.amount)) &&
+        Number(item.amount) > 0,
+    ) && totalAmount <= 999999999;
+  useEffect(() => {
+    if (!open) return;
+    let active = true;
+    setItems([newItem()]);
+    api<string[]>('/invoice-item-history')
+      .then((values) => {
+        if (active) setHistory(values);
+      })
+      .catch((error) => {
+        if (active) onError(error);
+      });
+    return () => {
+      active = false;
+    };
+  }, [open]);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(0);
@@ -1182,8 +1318,10 @@ function InvoiceDialog({
           const form = new FormData(event.currentTarget);
           onSubmit({
             contactIds: selected.map((contact) => contact.id),
-            amount: Number(form.get('amount')),
-            description: form.get('description'),
+            items: items.map((item) => ({
+              description: item.description,
+              amount: Number(item.amount),
+            })),
             dueDate: form.get('dueDate'),
           });
         }}
@@ -1244,20 +1382,92 @@ function InvoiceDialog({
                 次へ
               </Button>
             </div>
-            <TextField
-              name="amount"
-              label="金額（1人あたり・円）"
-              type="number"
-              required
-              inputProps={{ min: 1, max: 999999999, step: 1 }}
-            />
-            <TextField
-              name="description"
-              label="内容"
-              placeholder="例：11月の食事会 立替分"
-              required
-              inputProps={{ maxLength: 160 }}
-            />
+            <Stack spacing={2}>
+              <Typography component="h3">内容</Typography>
+              {items.map((item, index) => (
+                <Stack
+                  key={item.id}
+                  direction="row"
+                  spacing={1}
+                  alignItems="flex-start"
+                >
+                  <Autocomplete
+                    freeSolo
+                    options={history}
+                    inputValue={item.description}
+                    onInputChange={(_event, value) =>
+                      setItems((rows) =>
+                        rows.map((row) =>
+                          row.id === item.id
+                            ? { ...row, description: value }
+                            : row,
+                        ),
+                      )
+                    }
+                    sx={{ flex: 1, minWidth: 0 }}
+                    disabled={busy}
+                    renderInput={(params) => (
+                      <TextField
+                        {...params}
+                        label={`内容 ${index + 1}`}
+                        required
+                        inputProps={{ ...params.inputProps, maxLength: 160 }}
+                      />
+                    )}
+                  />
+                  <TextField
+                    label="金額（円）"
+                    type="number"
+                    required
+                    value={item.amount}
+                    disabled={busy}
+                    sx={{ width: 140 }}
+                    inputProps={{ min: 1, max: 999999999, step: 1 }}
+                    onChange={(event) =>
+                      setItems((rows) =>
+                        rows.map((row) =>
+                          row.id === item.id
+                            ? { ...row, amount: event.target.value }
+                            : row,
+                        ),
+                      )
+                    }
+                  />
+                  <IconButton
+                    aria-label={`項目${index + 1}の後に追加`}
+                    disabled={busy || items.length >= 100}
+                    onClick={() =>
+                      setItems((rows) => [
+                        ...rows.slice(0, index + 1),
+                        newItem(),
+                        ...rows.slice(index + 1),
+                      ])
+                    }
+                  >
+                    <Icon type="plus" />
+                  </IconButton>
+                  <IconButton
+                    aria-label={`項目${index + 1}を削除`}
+                    disabled={busy || items.length === 1}
+                    onClick={() =>
+                      setItems((rows) =>
+                        rows.filter((row) => row.id !== item.id),
+                      )
+                    }
+                  >
+                    <span aria-hidden="true">🗑️</span>
+                  </IconButton>
+                </Stack>
+              ))}
+              <Typography fontWeight={700}>
+                合計金額（1人あたり）：{yen(totalAmount)}
+              </Typography>
+              {totalAmount > 999999999 && (
+                <Alert severity="error">
+                  合計金額は999,999,999円以下にしてください
+                </Alert>
+              )}
+            </Stack>
             <TextField
               name="dueDate"
               label="お支払期日"
@@ -1278,7 +1488,9 @@ function InvoiceDialog({
           <Button
             variant="contained"
             type="submit"
-            disabled={busy || !selected.length || selected.length > 100}
+            disabled={
+              busy || !selected.length || selected.length > 100 || !validItems
+            }
           >
             {selected.length > 1 ? `${selected.length}人分を発行` : '発行する'}
           </Button>
