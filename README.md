@@ -2,9 +2,9 @@
 
 友人への立替請求、送信記録、領収書発行をローカルで管理するアプリです。TypeScript / React / MUI / Express / SQLiteを使用します。
 
-## 起動（Docker Compose / nginx HTTPS）
+## 起動（Docker Compose + OS上のnginx）
 
-DockerとDocker Compose v2が必要です。
+DockerとDocker Compose v2、およびホストOSにインストールしたnginxを使用します。Composeが作成するのはアプリのコンテナのみです。
 
 ```sh
 cp .env.example .env
@@ -12,71 +12,43 @@ cp .env.example .env
 
 .envのAPP_PASSWORDを独自の16文字以上のパスワードに変更してください。サンプルのままでは起動できません。
 
-自宅CAで発行した**サーバー証明書と、そのサーバー用秘密鍵**を用意します。証明書のSANにはアクセス時のホスト名（例: `invoice.home.arpa`）、IPでアクセスするならそのIPアドレスを含めてください。CAの秘密鍵はアプリに配置しません。
-
-```sh
-mkdir -p certs
-# 発行済みの証明書・秘密鍵を配置（コピー元は実際のパスへ変更）
-cp /path/to/fullchain.pem certs/fullchain.pem
-cp /path/to/privkey.pem certs/privkey.pem
-```
-
-- `fullchain.pem`: PEM形式。サーバー証明書を先頭に、必要な中間CA証明書を順に連結します。ルートCAによる直接署名ならサーバー証明書のみです。
-- `privkey.pem`: 対応するPEM形式のサーバー秘密鍵。無人起動できるようパスフレーズなしで用意し、読み取り権限を制限します。
-- 接続するPC・スマートフォンで自宅CAの**ルート証明書**を信頼済みに登録し、ローカルDNSまたはhostsでホスト名をサーバーIPへ解決できるようにします。
-
-nginxは非root（UID/GID 101）で動作します。Linuxホストでは、証明書ディレクトリの通過権限と秘密鍵の読み取り権限を付与してください。標準Dockerでの例です（独自パスを指定する場合は読み替え）。
-
-```sh
-sudo chown -R root:101 certs
-sudo chmod 750 certs
-sudo chmod 640 certs/fullchain.pem certs/privkey.pem
-```
-
-LAN/VPN上の端末から使う場合の`.env`設定例です。`BIND_ADDRESS`はサーバー自身のLAN/VPN IPに変更してください。
-
-```dotenv
-BIND_ADDRESS=192.168.1.10
-HTTPS_PORT=443
-NGINX_CONF_PATH=./nginx/default.conf
-TLS_CERTS_DIR=./certs
-```
-
 ```sh
 docker compose config --quiet
-docker compose run --rm --no-deps nginx nginx -t
 docker compose up --build -d
 ```
 
-証明書に合わせたURL（例: `https://invoice.home.arpa`）を開き、ユーザー名admin、設定したパスワードでログインします。`HTTPS_PORT=8443`ならURLにも`:8443`を付けます。既定の`BIND_ADDRESS=127.0.0.1`はサーバー自身からのみアクセスできます。最初に「発行者・振込先」で名前と口座を保存してください。
+アプリはホストの`127.0.0.1:3000`で待ち受けます。ポートを変更する場合は`.env`に`APP_PORT=3001`などを設定し、`docker compose up -d`で反映してください。
 
-構成は「ブラウザ → nginx（HTTPS）→ app:3000（Docker内部）」です。ホストへ公開するのはHTTPSのみで、HTTPの80番ポートとアプリの3000番ポートは公開しません。証明書がない状態ではnginxは起動しません。
+構成は「ブラウザ → OS上のnginx（HTTPS）→ 127.0.0.1:3000 → アプリコンテナ」です。nginxの設定と証明書はホストOS上で管理します。
+
+### OS上のnginx設定
+
+[nginx/default.conf](nginx/default.conf)を設定例として使用できます。ホストOSのnginxが読み込む設定ファイル（例: `/etc/nginx/conf.d/tatekae.conf`）に設定し、次の値を環境に合わせて変更してください。
+
+- `listen`: HTTPSの待受ポート。設定例は443です。LAN/VPNの特定IPだけに公開する場合は`listen 192.168.1.10:443 ssl;`のように指定します。
+- `server_name`: 証明書に合わせたホスト名（例: `invoice.home.arpa`）。
+- `ssl_certificate`・`ssl_certificate_key`: ホスト上のサーバー証明書と秘密鍵の絶対パス。
+- `proxy_pass`: `http://127.0.0.1:3000`。`APP_PORT`を変更した場合は同じポートに合わせます。
+
+自宅CAで発行したサーバー証明書のSANにはアクセスするホスト名、IPでアクセスするならそのIPアドレスを含めてください。`fullchain.pem`にはサーバー証明書を先頭に必要な中間CA証明書を連結し、`privkey.pem`には対応するサーバー秘密鍵を配置します。秘密鍵の読み取り権限はOS上のnginxの起動ユーザーに合わせて制限してください。CAの秘密鍵は配置しません。
+
+接続するPC・スマートフォンで自宅CAのルート証明書を信頼済みに登録し、ローカルDNSまたはhostsでホスト名をサーバーIPへ解決できるようにします。
+
+設定・証明書を配置したら、ホスト上で構文確認後に再読み込みします（nginxが起動済みの場合）。
+
+```sh
+sudo nginx -t
+# 上の検証が成功した場合のみ実行
+sudo nginx -s reload
+```
+
+証明書の更新やnginx設定の変更も同じ手順で反映できます。アプリコンテナの再ビルドや証明書のボリュームマウントは不要です。
+
+証明書に合わせたURL（例: `https://invoice.home.arpa`）を開き、ユーザー名admin、設定したパスワードでログインします。HTTPSを443以外で公開する場合はURLにもポートを付けてください。最初に「発行者・振込先」で名前と口座を保存してください。
+
+nginxでは`Host`のポート番号と`Origin`を保持し、`X-Forwarded-For`を`$remote_addr`で上書きしてください。Composeでは`TRUST_PROXY=1`で直前のプロキシ1段を信頼し、認証試行制限を接続元IPごとに適用します。アプリの公開先は`127.0.0.1`のまま使用してください。設定の参考: [nginxプロキシ仕様](https://nginx.org/en/docs/http/ngx_http_proxy_module.html)、[Expressのプロキシ設定](https://expressjs.com/en/guide/behind-proxies/)。
 
 初期データは空です。連絡先を追加・CSV取込してから請求書を発行します。テンプレート内のサンプル行は実際の連絡先に置き換えてください。
-
-### nginx設定・証明書の差し替え
-
-`NGINX_CONF_PATH`のファイルを`/etc/nginx/conf.d/default.conf`へ、`TLS_CERTS_DIR`のディレクトリを`/etc/nginx/certs`へ、読み取り専用のbind mountで渡します。どちらもホスト側の絶対パスを指定でき、イメージの再ビルドは不要です。ファイル・ディレクトリは起動前に作成してください。
-
-証明書を更新したら、同じディレクトリ内の`fullchain.pem`と`privkey.pem`を置き換え、権限を確認して再読み込みします。ホスト側のシンボリックリンクを使う場合、リンク先もコンテナから参照できる必要があります。
-
-```sh
-docker compose exec nginx nginx -t
-# 上の検証が成功した場合のみ実行
-docker compose exec nginx nginx -s reload
-```
-
-`default.conf`を編集・置換した場合や`.env`のマウント元・ポート・公開先を変更した場合は、次の手順で反映します。ファイル単体のbind mountは、エディタによるファイル置換を既存コンテナに反映しない場合があるため、再作成します。
-
-```sh
-docker compose run --rm --no-deps nginx nginx -t
-# 上の検証が成功した場合のみ実行
-docker compose up -d --no-deps --force-recreate nginx
-```
-
-証明書と秘密鍵はGit管理・Dockerビルド対象外です。独自の配置先をリポジトリ内に設ける場合は、そのディレクトリも`.gitignore`と`.dockerignore`に追加してください。
-
-nginx設定を変更する際は、`Host`のポート番号と`Origin`を保持し、`X-Forwarded-For`を`$remote_addr`で上書きしてください。Composeでは`TRUST_PROXY=1`で直前のnginxだけを信頼し、認証試行制限を接続元IPごとに適用します。この設定でappを直接公開しないでください。設定の参考: [nginxプロキシ仕様](https://nginx.org/en/docs/http/ngx_http_proxy_module.html)、[非rootイメージ](https://github.com/nginx/docker-nginx-unprivileged)、[Expressのプロキシ設定](https://expressjs.com/en/guide/behind-proxies/)。
 
 ## 使い方
 
@@ -103,9 +75,9 @@ nginx設定を変更する際は、`Host`のポート番号と`Origin`を保持�
 
 ## VPN経由の利用
 
-既定の公開先は127.0.0.1のみです。.envのBIND_ADDRESSを**ホストのVPN IP**に変更し、nginxコンテナを再作成します。証明書のホスト名がVPN IPへ解決されるようにしてください。インターネットへのポート転送は不要です。
+OS上のnginxをホストのVPN IPで待ち受けるように設定し、証明書のホスト名がVPN IPへ解決されるようにしてください。アプリコンテナの公開先は127.0.0.1のまま使用します。インターネットへのポート転送は不要です。
 
-ComposeではVPN内でもnginx経由のHTTPSを使用します。Web Share APIはHTTPSまたはlocalhostの対応ブラウザでのみ利用できます。非対応の場合はPNGを保存してLINE等へ添付し、「共有先への送信を記録」で状態を更新してください。共有ダイアログの終了だけでは送信成功を判定できません。
+VPN内でもOS上のnginx経由のHTTPSを使用します。Web Share APIはHTTPSまたはlocalhostの対応ブラウザでのみ利用できます。非対応の場合はPNGを保存してLINE等へ添付し、「共有先への送信を記録」で状態を更新してください。共有ダイアログの終了だけでは送信成功を判定できません。
 
 独自CORS設定は不要です。このアプリは単一管理者向けで、複数ユーザーの権限分離はありません。
 
@@ -119,7 +91,7 @@ npm run build
 npm start
 ```
 
-Dockerなしで起動した場合は[http://localhost:3000](http://localhost:3000)を開きます。`PORT`・`HOST`はこのローカル起動用で、ComposeのHTTPS公開先には`HTTPS_PORT`・`BIND_ADDRESS`を使用します。ローカルで直接起動する場合は`TRUST_PROXY`を設定せず、転送ヘッダーを信頼しない既定動作を使ってください。
+Dockerなしで起動した場合は[http://localhost:3000](http://localhost:3000)を開きます。`PORT`・`HOST`はこのローカル起動用で、Composeのホスト側ポートには`APP_PORT`を使用します。HTTPSの公開先はOS上のnginxで設定します。ローカルで直接起動する場合は`TRUST_PROXY`を設定せず、転送ヘッダーを信頼しない既定動作を使ってください。
 
 開発時はAPI用に `npm run dev`、別ターミナルで `npm run dev:web`。Viteが表示するlocalhost URLを開きます。
 

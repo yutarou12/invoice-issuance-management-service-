@@ -34,7 +34,7 @@ export function createApp(
 ) {
   const app = express();
   app.disable('x-powered-by');
-  // Composeではnginxだけが外部公開され、転送ヘッダーを上書きする。
+  // Composeのアプリはホストのループバック限定。OS上のnginxが転送ヘッダーを上書きする。
   // 直前の1段だけを信頼し、認証試行制限をクライアントIP単位に保つ。
   app.set('trust proxy', process.env.TRUST_PROXY === '1' ? 1 : false);
   // Basic認証もVPN内のHTTPS経由で使用する。認証情報はハッシュ後に一定時間比較する。
